@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Reef Sort</title><meta name="theme-color" content="#1f9fd0">
+<title>Reef Sort</title><meta name="reef-sort-version" content="1.2"><meta name="theme-color" content="#1f9fd0">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Reef Sort">
 <link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png"><link rel="icon" href="icons/icon-192.png">
@@ -91,7 +91,7 @@ html,body,.btn,.pill{font-family:ui-rounded,"SF Pro Rounded","Nunito","Varela Ro
 <button class="btn" id="setClose">Resume</button><button class="btn blue" id="setHome">Home</button><button class="btn red" id="reset" style="font-size:15px;padding:10px">Reset progress</button></div></div>
 <div class="modal" id="m-howto"><div class="card"><h2>How to play</h2><p>Tap a sea creature in a <b>clear bubble</b>. It swims to the bowl asking for it, or waits in the tray.</p><p>Three of a kind fill a bowl. Dimmed bubbles are covered, so clear the ones on top first.</p><p>Don't let all 6 tray slots fill up! Use <b>Net</b>, <b>Clear</b> and <b>Shuffle</b> when stuck, and tap <b>+</b> to open a 4th bowl.</p><button class="btn" id="howOk">Let's go!</button></div></div>
 <div id="toast"></div>
-<script>const LEVEL_SEEDS=[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,1,2,1,1,4,1,1,1,1,4,3,2,1,2,5,4,2,4,1,1,5,6,3,1,4,2,1,2,15,7,1,6,5,5,3,9,17,2,5,2,6,5,3,9,2,5,8,4,9,9,4];
+<script>const LEVEL_SEEDS=[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,2,1,1,1,1,2,2,3,3,1,1,1,1,1,3,2,6,1,2,1,1,3,1,3,2,3,3,2,1,1,1,2,1,1,1,1,1,2,1,1,1,1,1,5,1,1,1,1,1,1,2,1,3,1,1,2,1,2,2];
 
 ;
 /* Reef Sort engine: level generator, game rules and solver (pure JS, no DOM). */
@@ -104,8 +104,8 @@ const Engine = (() => {
   function hash(n) { n = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b); n ^= n >>> 13; n = Math.imul(n, 0xc2b2ae35); return (n ^ n >>> 16) >>> 0; }
 
   function params(n) {
-    const species = Math.min(NSPEC, 3 + Math.floor((n - 1) / 4));
-    const triples = Math.max(species, Math.min(36, 5 + Math.floor(n * 0.7)));
+    const species = Math.min(12, 3 + Math.floor((n - 1) / 4)); // 12 kinds max per level (all 20 rotate in across levels)
+    const triples = Math.max(species, Math.min(30, 5 + Math.floor(n * 0.6)));
     const maxK = n < 3 ? 2 : n < 8 ? 3 : n < 15 ? 4 : 5;
     return { species, triples, maxK };
   }
@@ -121,22 +121,18 @@ const Engine = (() => {
     shuffle(species, R);
     const sizes = []; let left = species.length;
     while (left > 0) { let k = 1 + Math.floor(R() * p.maxK); if (n <= 2) k = 2; k = Math.min(k, left); sizes.push(k); left -= k; }
-    const cols = 4, rows = 4, cw = FW / cols, ch = FH / rows;
-    const offs = [[0, 0], [.5, .5], [0, .5], [.5, 0], [.25, .25], [.75, .75]];
-    const bubbles = []; let layer = 0, bi = 0;
-    while (bi < sizes.length) {
-      const [ox, oy] = offs[layer % offs.length];
-      const cells = [];
-      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([(c + .5 + ox) * cw, (r + .5 + oy) * ch]);
-      shuffle(cells, R);
-      const take = n < 3 ? cells.length : layer === 0 ? Math.min(cells.length, Math.max(5, Math.ceil(sizes.length * (n < 10 ? .7 : .55)))) : Math.min(Math.ceil(cells.length * .75), Math.max(3, Math.ceil((sizes.length - bi) * .6)));
-      for (let i = 0; i < take && bi < sizes.length; i++, bi++) {
-        const k = sizes[bi], r = RAD[k];
-        const x = Math.max(r + 2, Math.min(FW - r - 2, cells[i][0] + (R() - .5) * 14));
-        const y = Math.max(r + 2, Math.min(FH - r - 2, cells[i][1] + (R() - .5) * 14));
-        bubbles.push({ x, y, r, z: bubbles.length, k, layer });
+    // Non-overlapping heap: drop bubbles one by one (best of 3 random x = lowest landing) onto floor/heap.
+    // If the heap overflows the field, shrink all radii a little and repack (deterministic per seed).
+    let bubbles, f = 1;
+    for (let tries = 0; tries < 40; tries++, f *= .96) {
+      const R2 = rng(seed * 31 + n * 7 + 1); bubbles = []; let ok = true;
+      for (let bi = 0; bi < sizes.length; bi++) {
+        const k = sizes[bi], r = RAD[k] * f; let best = null;
+        for (let t = 0; t < 16; t++) { const x = r + (FW - 2 * r) * R2(), y = dropY(bubbles, x, r, FH - r); if (!best || y > best.y) best = { x, y }; }
+        if (best.y - r < 0) { ok = false; break; }
+        bubbles.push({ x: best.x, y: best.y, r, z: bi, k, layer: 0 });
       }
-      layer++;
+      if (ok) break;
     }
     // assign items to bubble slots
     const items = []; let si = 0;
@@ -144,17 +140,20 @@ const Engine = (() => {
     return { n, seed, bubbles, items };
   }
 
-  const coverOf = (a, c) => c.left > 0 && c.z > a.z && Math.hypot(a.x - c.x, a.y - c.y) < (a.r + c.r) * 0.78;
-  // Gravity: deterministic heap settle. Each bubble drops straight down (bottom-most first) until it
-  // rests on the floor or on a same-layer bubble below it. Upper layers rest over lower ones (covering).
+  const GAP = 3;
+  // landing y for a circle (x,r) dropped from above onto the floor/other circles; never overlaps (centre gap >= r1+r2+GAP)
+  function dropY(list, x, r, y0) {
+    let y = y0;
+    for (const c of list) { const D = r + c.r + GAP, dx = Math.abs(x - c.x); if (dx < D) y = Math.min(y, c.y - Math.sqrt(D * D - dx * dx)); }
+    return y;
+  }
+  // a bubble is covered while another live bubble rests on it (touching from above)
+  const coverOf = (a, c) => c !== a && c.left > 0 && c.y < a.y - 1e-6 && Math.hypot(a.x - c.x, a.y - c.y) <= a.r + c.r + GAP + .5;
+  // Gravity: deterministic settle, bottom-most first, each bubble drops straight down onto floor/settled bubbles.
   function settle_g(st) {
     const alive = st.bubbles.map((b, i) => i).filter(i => st.bubbles[i].left > 0).sort((a, b) => (st.bubbles[b].y - st.bubbles[a].y) || a - b);
     const done = [];
-    for (const i of alive) {
-      const b = st.bubbles[i]; let y = FH - b.r;
-      for (const j of done) { const c = st.bubbles[j]; if (c.layer !== b.layer) continue; const D = (b.r + c.r) * .96, dx = Math.abs(b.x - c.x); if (dx < D && c.y > b.y - 1e-6) y = Math.min(y, c.y - Math.sqrt(D * D - dx * dx)); }
-      b.y = Math.max(b.y, y); done.push(i);
-    }
+    for (const i of alive) { const b = st.bubbles[i]; b.y = Math.max(b.y, dropY(done, b.x, b.r, FH - b.r)); done.push(b); }
     computeCovers(st);
   }
   function computeCovers(st) { st.covers = st.bubbles.map(a => st.bubbles.map((c, j) => coverOf(a, c) ? j : -1).filter(j => j >= 0)); }
@@ -248,10 +247,11 @@ const Engine = (() => {
     st.over = 0;
     let z = Math.max(...st.bubbles.map(b => b.z)) + 1;
     const groups = []; for (let i = 0; i < ids.length; i += 3) groups.push(ids.slice(i, i + 3));
-    groups.forEach((g, gi) => {
-      const k = g.length, r = RAD[k];
-      const x = FW / 2 + (gi - (groups.length - 1) / 2) * 120, y = 70;
-      const b = { x, y, r, z: z++, k, layer: 99, items: g.slice(), left: k };
+    groups.forEach(g => {
+      const k = g.length, r = RAD[k] * (st.bubbles[0].r / RAD[st.bubbles[0].k]);
+      const live = st.bubbles.filter(b => b.left > 0); let best = null;
+      for (let x = r; x <= FW - r; x += 10) { const y = dropY(live, x, r, FH - r); if (!best || y > best.y) best = { x, y }; }
+      const b = { x: best.x, y: best.y, r, z: z++, k, layer: 0, items: g.slice(), left: k };
       st.bubbles.push(b);
       g.forEach((id, j) => { st.loc[id] = 0; st.ib[id] = st.bubbles.length - 1; st.slot[id] = j; ev.push({ t: 'board', id }); });
     });
@@ -308,7 +308,7 @@ const Engine = (() => {
     }
     throw new Error('no solvable layout for level ' + n);
   }
-  return { NSPEC, TRAY, FW, FH, RAD, params, layout, generate, solve, newState, take, net, clearTray, shuffleBoard, unlockBowl, settle: settle_g, accessible, isCovered, computeCovers };
+  return { NSPEC, TRAY, FW, FH, RAD, params, layout, generate, solve, newState, take, net, clearTray, shuffleBoard, unlockBowl, settle: settle_g, GAP, accessible, isCovered, computeCovers };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;
 
