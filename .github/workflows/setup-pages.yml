@@ -1,0 +1,28 @@
+name: setup-pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode icons
+        run: |
+          shopt -s nullglob
+          files=(icons/*.png.b64)
+          if [ ${#files[@]} -gt 0 ]; then
+            for f in "${files[@]}"; do base64 -d "$f" > "${f%.b64}"; git rm -q "$f"; done
+            git config user.name "reef-sort-bot"; git config user.email "actions@users.noreply.github.com"
+            git add icons/*.png && git commit -m "Decode icons" && git push
+          fi
+      - name: Enable Pages (main /)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST repos/${{ github.repository }}/pages -f "source[branch]=main" -f "source[path]=/" || gh api repos/${{ github.repository }}/pages || true
